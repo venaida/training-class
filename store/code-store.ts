@@ -1,37 +1,44 @@
+// store/code-store.ts - Updated to use Supabase
 "use client"
 
 import { create } from "zustand"
 import { persist, createJSONStorage } from "zustand/middleware"
 import { genRandomCode } from "@/lib/code-utils"
-
-export type AccessCode = {
-  code: string
-  name?: string
-  status: "active" | "revoked"
-  createdAt: number
-}
+import { 
+  getAccessCodes, 
+  createAccessCode, 
+  revokeAccessCode, 
+  activateAccessCode, 
+  deleteAccessCodes,
+  validateAccessCode,
+  type AccessCode 
+} from "@/lib/database"
 
 type CodeState = {
   codes: AccessCode[]
   selected: string[]
-  // seed
-  seedIfEmpty: () => void
-  // generation
-  generateOne: (name?: string) => string
-  generateBulk: (n: number, names?: (string | undefined)[]) => string[]
-  // mutations
-  revoke: (code: string) => void
-  activate: (code: string) => void
-  removeMany: (codes: string[]) => void
-  addMany: (codes: string[]) => void
-  addManyNamed: (items: { code: string; name?: string }[]) => void
-  setName: (code: string, name?: string) => void
-  setNamesBulk: (codes: string[], names: (string | undefined)[], overwrite?: boolean) => void
-  upsertNames: (pairs: { code: string; name?: string }[]) => void
-  findCode: (code: string) => AccessCode | undefined
-  // selection
-  toggleSelect: (code: string) => void
+  loading: boolean
+  error: string | null
+  
+  // Data loading
+  loadCodes: () => Promise<void>
+  
+  // Code validation
+  findCode: (code: string) => Promise<AccessCode | null>
+  
+  // Generation
+  generateOne: (name?: string, classId?: string) => Promise<string>
+  generateBulk: (n: number, names?: (string | undefined)[], classId?: string) => Promise<string[]>
+  
+  // Mutations
+  revoke: (code: string) => Promise<void>
+  activate: (code: string) => Promise<void>
+  removeMany: (codes: string[]) => Promise<void>
+  
+  // Local state management
+  setError: (error: string | null) => void
   clearSelection: () => void
+  toggleSelect: (code: string) => void
   selectAllOnPage: (ids: string[]) => void
 }
 
@@ -40,144 +47,183 @@ export const useCodeStore = create<CodeState>()(
     (set, get) => ({
       codes: [],
       selected: [],
-      seedIfEmpty: () => {
-        const { codes } = get()
-        if (codes.length > 0) return
-        const demo = Array.from({ length: 6 }, () => genRandomCode())
-        const now = Date.now()
-        set({
-          codes: demo.map((c, i) => ({
-            code: c,
-            name: i === 0 ? "Alice" : i === 1 ? "Bob" : "",
-            status: i % 5 === 0 ? "revoked" : "active",
-            createdAt: now - i * 3600_000,
-          })),
-        })
-      },
-      generateOne: (name?: string) => {
-        const code = genRandomCode()
-        const item: AccessCode = { code, name: name?.trim() || "", status: "active", createdAt: Date.now() }
-        set((s) => ({ codes: [item, ...s.codes] }))
-        return code
-      },
-      generateBulk: (n: number, names?: (string | undefined)[]) => {
-        const list = Array.from({ length: n }, () => genRandomCode())
-        const now = Date.now()
-        const items: AccessCode[] = list.map((code, idx) => ({
-          code,
-          name: names?.[idx]?.trim() || "",
-          status: "active",
-          createdAt: now,
-        }))
-        set((s) => ({ codes: [...items, ...s.codes] }))
-        return list
-      },
-      revoke: (code: string) => {
-        const id = code.toUpperCase()
-        set((s) => ({
-          codes: s.codes.map((c) => (c.code === id ? { ...c, status: "revoked" } : c)),
-        }))
-      },
-      activate: (code: string) => {
-        const id = code.toUpperCase()
-        set((s) => ({
-          codes: s.codes.map((c) => (c.code === id ? { ...c, status: "active" } : c)),
-        }))
-      },
-      removeMany: (ids: string[]) => {
-        const setIds = new Set(ids.map((x) => x.toUpperCase()))
-        set((s) => ({
-          codes: s.codes.filter((c) => !setIds.has(c.code)),
-          selected: s.selected.filter((id) => !setIds.has(id)),
-        }))
-      },
-      addMany: (codes: string[]) => {
-        const setExisting = new Set(get().codes.map((c) => c.code))
-        const now = Date.now()
-        const items: AccessCode[] = codes
-          .map((code) => code.toUpperCase().trim())
-          .filter((c) => c && !setExisting.has(c))
-          .map((code) => ({ code, name: "", status: "active", createdAt: now }))
-        if (items.length) {
-          set((s) => ({ codes: [...items, ...s.codes] }))
+      loading: false,
+      error: null,
+
+      loadCodes: async () => {
+        set({ loading: true, error: null })
+        try {
+          const codes = await getAccessCodes()
+          set({ codes, loading: false })
+        } catch (error) {
+          set({ 
+            error: error instanceof Error ? error.message : 'Failed to load codes',
+            loading: false 
+          })
         }
       },
-      addManyNamed: (items: { code: string; name?: string }[]) => {
-        const now = Date.now()
-        const existing = new Map(get().codes.map((c) => [c.code, c] as const))
-        const newOnes: AccessCode[] = []
-        for (const it of items) {
-          const code = it.code.toUpperCase().trim()
-          const name = it.name?.trim() || ""
-          if (!code) continue
-          if (existing.has(code)) {
-            // update name for existing
-            set((s) => ({
-              codes: s.codes.map((c) => (c.code === code ? { ...c, name } : c)),
-            }))
-          } else {
-            newOnes.push({ code, name, status: "active", createdAt: now })
+
+      findCode: async (code: string) => {
+        try {
+          return await validateAccessCode(code)
+        } catch (error) {
+          console.error('Error validating code:', error)
+          return null
+        }
+      },
+
+      generateOne: async (name?: string, classId?: string) => {
+        set({ loading: true, error: null })
+        try {
+          const code = genRandomCode()
+          // Use first available class if no classId provided
+          const state = get()
+          let targetClassId = classId
+          
+          if (!targetClassId && state.codes.length > 0) {
+            targetClassId = state.codes[0].class_id
           }
+          
+          if (!targetClassId) {
+            throw new Error('No class available. Please create a class first.')
+          }
+
+          const newCode = await createAccessCode(code, targetClassId, name?.trim())
+          
+          set(state => ({ 
+            codes: [newCode, ...state.codes],
+            loading: false 
+          }))
+          
+          return code
+        } catch (error) {
+          set({ 
+            error: error instanceof Error ? error.message : 'Failed to generate code',
+            loading: false 
+          })
+          throw error
         }
-        if (newOnes.length) {
-          set((s) => ({ codes: [...newOnes, ...s.codes] }))
+      },
+
+      generateBulk: async (n: number, names?: (string | undefined)[], classId?: string) => {
+        set({ loading: true, error: null })
+        try {
+          const codes: string[] = []
+          const state = get()
+          let targetClassId = classId
+          
+          if (!targetClassId && state.codes.length > 0) {
+            targetClassId = state.codes[0].class_id
+          }
+          
+          if (!targetClassId) {
+            throw new Error('No class available. Please create a class first.')
+          }
+
+          const newCodes: AccessCode[] = []
+          
+          for (let i = 0; i < n; i++) {
+            const code = genRandomCode()
+            const name = names?.[i]?.trim()
+            const newCode = await createAccessCode(code, targetClassId, name)
+            codes.push(code)
+            newCodes.push(newCode)
+          }
+          
+          set(state => ({ 
+            codes: [...newCodes, ...state.codes],
+            loading: false 
+          }))
+          
+          return codes
+        } catch (error) {
+          set({ 
+            error: error instanceof Error ? error.message : 'Failed to generate codes',
+            loading: false 
+          })
+          throw error
         }
       },
-      setName: (code: string, name?: string) => {
-        const id = code.toUpperCase()
-        set((s) => ({
-          codes: s.codes.map((c) => (c.code === id ? { ...c, name: name?.trim() || "" } : c)),
-        }))
+
+      revoke: async (code: string) => {
+        set({ loading: true, error: null })
+        try {
+          await revokeAccessCode(code)
+          set(state => ({
+            codes: state.codes.map(c => 
+              c.code === code.toUpperCase() ? { ...c, status: 'revoked' } : c
+            ),
+            loading: false
+          }))
+        } catch (error) {
+          set({ 
+            error: error instanceof Error ? error.message : 'Failed to revoke code',
+            loading: false 
+          })
+        }
       },
-      setNamesBulk: (codes: string[], names: (string | undefined)[], overwrite = true) => {
-        const nameMap = new Map<string, string | undefined>()
-        codes.forEach((c, idx) => nameMap.set(c.toUpperCase(), names[idx]))
-        set((s) => ({
-          codes: s.codes.map((c) => {
-            const nxt = nameMap.get(c.code)
-            if (nxt === undefined) return c
-            if (!overwrite && c.name) return c
-            return { ...c, name: (nxt ?? "").trim() }
-          }),
-        }))
+
+      activate: async (code: string) => {
+        set({ loading: true, error: null })
+        try {
+          await activateAccessCode(code)
+          set(state => ({
+            codes: state.codes.map(c => 
+              c.code === code.toUpperCase() ? { ...c, status: 'active' } : c
+            ),
+            loading: false
+          }))
+        } catch (error) {
+          set({ 
+            error: error instanceof Error ? error.message : 'Failed to activate code',
+            loading: false 
+          })
+        }
       },
-      upsertNames: (pairs: { code: string; name?: string }[]) => {
-        const map = new Map(pairs.map((p) => [p.code.toUpperCase(), (p.name ?? "").trim()]))
-        set((s) => ({
-          codes: s.codes.map((c) => (map.has(c.code) ? { ...c, name: map.get(c.code) } : c)),
-        }))
+
+      removeMany: async (codes: string[]) => {
+        set({ loading: true, error: null })
+        try {
+          await deleteAccessCodes(codes)
+          const upperCodes = codes.map(c => c.toUpperCase())
+          set(state => ({
+            codes: state.codes.filter(c => !upperCodes.includes(c.code)),
+            selected: state.selected.filter(c => !upperCodes.includes(c)),
+            loading: false
+          }))
+        } catch (error) {
+          set({ 
+            error: error instanceof Error ? error.message : 'Failed to delete codes',
+            loading: false 
+          })
+        }
       },
-      findCode: (code: string) => {
-        const needle = code.toUpperCase()
-        return get().codes.find((c) => c.code === needle)
-      },
+
+      setError: (error: string | null) => set({ error }),
+      
+      clearSelection: () => set({ selected: [] }),
+      
       toggleSelect: (code: string) => {
         const id = code.toUpperCase()
-        set((s) => ({
-          selected: s.selected.includes(id)
-            ? s.selected.filter((x) => x !== id)
-            : [...s.selected, id],
+        set(state => ({
+          selected: state.selected.includes(id)
+            ? state.selected.filter(x => x !== id)
+            : [...state.selected, id]
         }))
       },
-      clearSelection: () => set({ selected: [] }),
+      
       selectAllOnPage: (ids: string[]) => {
-        set({ selected: ids.map((x) => x.toUpperCase()) })
+        set({ selected: ids.map(x => x.toUpperCase()) })
       },
     }),
     {
-      name: "code-store",
-      version: 2,
+      name: "code-store-cache",
+      version: 1,
       storage: createJSONStorage(() => localStorage),
-      migrate: (persisted: any, fromVersion) => {
-        if (!persisted) return persisted
-        if (fromVersion < 2 && Array.isArray(persisted.state?.codes)) {
-          persisted.state.codes = persisted.state.codes.map((c: any) => ({
-            name: "",
-            ...c,
-          }))
-        }
-        return persisted
-      },
+      // Only persist UI state, not the codes themselves
+      partialize: (state) => ({ 
+        selected: state.selected 
+      }),
     }
   )
 )

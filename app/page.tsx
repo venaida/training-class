@@ -1,3 +1,4 @@
+// app/page.tsx - Updated Student Login with Supabase
 "use client"
 
 import { useEffect, useState } from "react"
@@ -6,45 +7,69 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { LogIn } from 'lucide-react'
-import Link from "next/link"
-import { useCodeStore } from "@/store/code-store"
+import { LogIn, Loader2 } from 'lucide-react'
+import { validateAccessCode } from "@/lib/database"
 import { cn } from "@/lib/utils"
 
 export default function Page() {
   const router = useRouter()
   const [code, setCode] = useState("")
   const [error, setError] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
   const [mounted, setMounted] = useState(false)
-  const { findCode, seedIfEmpty } = useCodeStore()
 
   useEffect(() => {
     setMounted(true)
-    // Seed demo data on first visit
-    seedIfEmpty()
-  }, [seedIfEmpty])
+  }, [])
 
-  function handleJoin() {
+  async function handleJoin() {
+    if (loading) return
+    
     setError(null)
+    setLoading(true)
+    
     const trimmed = code.trim().toUpperCase()
     if (!trimmed) {
       setError("Please enter an access code.")
+      setLoading(false)
       return
     }
-    const existing = findCode(trimmed)
-    if (!existing) {
-      setError("Invalid access code. Please check and try again.")
-      return
-    }
-    if (existing.status !== "active") {
-      setError("This code has been revoked. Contact your instructor.")
-      return
-    }
-    // Persist "student session" in localStorage (placeholder auth)
+
     try {
-      localStorage.setItem("student:accessCode", trimmed)
-    } catch {}
-    router.push("/class")
+      const validCode = await validateAccessCode(trimmed)
+      
+      if (!validCode) {
+        setError("Invalid access code. Please check and try again.")
+        setLoading(false)
+        return
+      }
+
+      if (validCode.status !== "active") {
+        setError("This code has been revoked. Contact your instructor.")
+        setLoading(false)
+        return
+      }
+
+      // Store student session data
+      const sessionData = {
+        accessCode: trimmed,
+        className: validCode.class_name,
+        jitsiRoom: validCode.jitsi_room_name,
+        joinedAt: new Date().toISOString()
+      }
+
+      try {
+        localStorage.setItem("student:session", JSON.stringify(sessionData))
+      } catch (e) {
+        console.warn("Failed to save session to localStorage:", e)
+      }
+
+      router.push("/class")
+    } catch (error) {
+      console.error("Error validating code:", error)
+      setError("Unable to validate code. Please try again.")
+      setLoading(false)
+    }
   }
 
   return (
@@ -83,27 +108,26 @@ export default function Page() {
               placeholder="Enter Access Code"
               className="h-11 bg-white/20 border-white/20 placeholder:text-white/70 text-white"
               aria-label="Enter Access Code"
+              disabled={loading}
               onKeyDown={(e) => {
                 if (e.key === "Enter") handleJoin()
               }}
             />
           </CardContent>
-          <CardFooter className="flex flex-col gap-4">
+          <CardFooter>
             <Button
               size="lg"
-              className="w-full bg-indigo-500 hover:bg-indigo-400 text-white"
+              className="w-full bg-indigo-500 hover:bg-indigo-400 text-white disabled:opacity-50"
               onClick={handleJoin}
+              disabled={loading}
             >
-              <LogIn className="mr-2 h-4 w-4" />
-              Join Class
+              {loading ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <LogIn className="mr-2 h-4 w-4" />
+              )}
+              {loading ? "Validating..." : "Join Class"}
             </Button>
-
-            <div className="text-xs text-white/80 w-full flex items-center justify-between">
-              <span>Instructor?</span>
-              <Link href="/admin/login" className="underline underline-offset-4">
-                Go to Admin Login
-              </Link>
-            </div>
           </CardFooter>
         </Card>
       </div>
