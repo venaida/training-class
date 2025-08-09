@@ -1,10 +1,9 @@
 [build]
-  command = "rm -rf node_modules package-lock.json .next && npm install && npm run build"
+  command = "rm -rf node_modules package-lock.json .next && npm install --legacy-peer-deps && npm run build"
   publish = ".next"
 
 [build.environment]
   NODE_ENV = "production"
-  NPM_FLAGS = "--legacy-peer-deps"
 
 [[plugins]]
   package = "@netlify/plugin-nextjs"
