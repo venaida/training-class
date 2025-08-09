@@ -1,30 +1,9 @@
 [build]
-  command = "npm run build"
-  functions = "netlify/functions"
+  command = "pnpm install --no-frozen-lockfile && pnpm run build"
   publish = ".next"
+
+[build.environment]
+  NODE_ENV = "production"
 
 [[plugins]]
   package = "@netlify/plugin-nextjs"
-
-[build.environment]
-  NEXT_TELEMETRY_DISABLED = "1"
-
-# Redirect for client-side routing
-[[redirects]]
-  from = "/*"
-  to = "/index.html"
-  status = 200
-  conditions = {Role = ["admin"]}
-
-# API redirects
-[[redirects]]
-  from = "/api/*"
-  to = "/.netlify/functions/:splat"
-  status = 200
-
-# Development proxy for functions
-[dev]
-  command = "npm run dev"
-  targetPort = 3000
-  port = 8888
-  functionsPort = 9999
